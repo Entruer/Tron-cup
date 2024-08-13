@@ -18,7 +18,7 @@
 #define LED_PIN           GPIO_NUM_2
 
 #define I2C_MASTER_PORT   I2C_NUM_0
-#define I2C_MASTER_FREQ   400000
+#define I2C_MASTER_FREQ   100000
 #define I2C_MASTER_SDA_IO GPIO_NUM_21
 #define I2C_MASTER_SCL_IO GPIO_NUM_22
 
@@ -60,7 +60,32 @@ bool  is_angle_updated = false;
  * Function Definitions
  ****************************************************************************************/
 
-void DecodeIMUData(uint8_t chrTemp[])
+uint8_t read_water_level()
+{
+  uint8_t data = 0;
+
+  i2c_cmd_handle_t cmd_write = i2c_cmd_link_create();
+  i2c_master_start(cmd_write);
+  i2c_master_write_byte(cmd_write, 0x80, I2C_MASTER_ACK);
+  i2c_master_write(cmd_write, &data, 1, I2C_MASTER_ACK);
+  i2c_master_stop(cmd_write);
+  i2c_master_cmd_begin(I2C_MASTER_PORT, cmd_write, 100);
+  i2c_cmd_link_delete(cmd_write);
+
+  vTaskDelay(pdMS_TO_TICKS(10));
+
+  i2c_cmd_handle_t cmd_read = i2c_cmd_link_create();
+  i2c_master_start(cmd_read);
+  i2c_master_write_byte(cmd_read, 0x81, I2C_MASTER_ACK);
+  i2c_master_read(cmd_read, &data, 1, I2C_MASTER_ACK);
+  i2c_master_stop(cmd_read);
+  i2c_master_cmd_begin(I2C_MASTER_PORT, cmd_read, 100);
+  i2c_cmd_link_delete(cmd_read);
+
+  return data;
+}
+
+void decode_imu_data(uint8_t chrTemp[])
 {
   // Sum Check
   uint8_t sum = 0;
@@ -82,6 +107,11 @@ void DecodeIMUData(uint8_t chrTemp[])
   }
 }
 
+void send_water_level(uint8_t data)
+{
+  ESP_LOGI("Position", "Position stable : %d", data);
+}
+
 /****************************************************************************************
  * Tasks
  ****************************************************************************************/
@@ -95,8 +125,7 @@ static void uart_task(void *args)
     if (len > 0)
     {
       is_angle_updated = true;
-      DecodeIMUData(data);
-      ESP_LOGI("IMU", "Angle: %.2f, %.2f, %.2f", angle[0], angle[1], angle[2]);
+      decode_imu_data(data);
     }
     vTaskDelay(pdMS_TO_TICKS(100));
   }
@@ -104,8 +133,12 @@ static void uart_task(void *args)
 
 static void position_check_task(void *args)
 {
-  unsigned int position_stable_count = 0;
-  float        angle_init[3]         = {0, 0, 0};
+  unsigned int position_stable_count    = 0;
+  unsigned int water_level_stable_count = 0;
+  bool         is_water_level_updated   = false;
+  float        angle_init[3]            = {0, 0, 0};
+  uint8_t      water_level_init         = 0;
+  uint8_t      water_level              = 0;
 
   // Wait for the first angle data
   while (!is_angle_updated)
@@ -124,18 +157,45 @@ static void position_check_task(void *args)
     }
     else
     {
-      position_stable_count = 0;
+      position_stable_count    = 0;
+      water_level_stable_count = 0;
     }
 
-    if (position_stable_count >= 3)
+    if (position_stable_count < 3)
     {
-      gpio_set_level(LED_PIN, 1);
-      position_stable_count = 0;
+      gpio_set_level(LED_PIN, 0);
+      vTaskDelay(pdMS_TO_TICKS(3000));
+      continue;
+    }
+
+    if (!is_water_level_updated)
+    {
+      water_level_init       = read_water_level();
+      is_water_level_updated = true;
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      continue;
+    }
+
+    water_level = read_water_level();
+    if (abs(water_level_init - water_level) < 5)
+    {
+      water_level_stable_count++;
     }
     else
     {
-      gpio_set_level(LED_PIN, 0);
+      water_level_stable_count = 0;
     }
+
+    if (water_level_stable_count < 3)
+    {
+      gpio_set_level(LED_PIN, 0);
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      continue;
+    }
+
+    send_water_level(water_level);
+    position_stable_count = 0;
+    gpio_set_level(LED_PIN, 1);
 
     vTaskDelay(pdMS_TO_TICKS(3000));
   }
