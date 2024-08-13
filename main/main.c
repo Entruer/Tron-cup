@@ -53,7 +53,8 @@ uart_config_t uart_config = {
  * Global Variables
  ****************************************************************************************/
 
-float Angle[3];
+float angle[3];
+bool  is_angle_updated = false;
 
 /****************************************************************************************
  * Function Definitions
@@ -75,14 +76,14 @@ void DecodeIMUData(uint8_t chrTemp[])
   // Decode
   if (chrTemp[0] == 0x55 && chrTemp[1] == 0x53)
   {
-    Angle[0]    = ((uint16_t) (chrTemp[3] << 8 | chrTemp[2])) / 32768.0 * 180;
-    Angle[1]    = ((uint16_t) (chrTemp[5] << 8 | chrTemp[4])) / 32768.0 * 180;
-    Angle[2]    = ((uint16_t) (chrTemp[7] << 8 | chrTemp[6])) / 32768.0 * 180;
+    angle[0] = ((uint16_t) (chrTemp[3] << 8 | chrTemp[2])) / 32768.0 * 180;
+    angle[1] = ((uint16_t) (chrTemp[5] << 8 | chrTemp[4])) / 32768.0 * 180;
+    angle[2] = ((uint16_t) (chrTemp[7] << 8 | chrTemp[6])) / 32768.0 * 180;
   }
 }
 
 /****************************************************************************************
- * UART Task
+ * Tasks
  ****************************************************************************************/
 
 static void uart_task(void *args)
@@ -93,10 +94,50 @@ static void uart_task(void *args)
     int len = uart_read_bytes(UART_PORT, data, 11, 10);
     if (len > 0)
     {
+      is_angle_updated = true;
       DecodeIMUData(data);
-      ESP_LOGI("IMU", "Angle: %.2f, %.2f, %.2f", Angle[0], Angle[1], Angle[2]);
+      ESP_LOGI("IMU", "Angle: %.2f, %.2f, %.2f", angle[0], angle[1], angle[2]);
     }
-    vTaskDelay(pdMS_TO_TICKS(5));
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+}
+
+static void position_check_task(void *args)
+{
+  unsigned int position_stable_count = 0;
+  float        angle_init[3]         = {0, 0, 0};
+
+  // Wait for the first angle data
+  while (!is_angle_updated)
+  {
+    vTaskDelay(pdMS_TO_TICKS(3000));
+  }
+  angle_init[0] = angle[0];
+  angle_init[1] = angle[1];
+  angle_init[2] = angle[2];
+
+  while (1)
+  {
+    if ((angle_init[0] - angle[0] < 10 || angle_init[0] - angle[0] > 350) && (angle_init[1] - angle[1] < 10 || angle_init[1] - angle[1] > 350))
+    {
+      position_stable_count++;
+    }
+    else
+    {
+      position_stable_count = 0;
+    }
+
+    if (position_stable_count >= 3)
+    {
+      gpio_set_level(LED_PIN, 1);
+      position_stable_count = 0;
+    }
+    else
+    {
+      gpio_set_level(LED_PIN, 0);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(3000));
   }
 }
 
@@ -106,7 +147,6 @@ static void uart_task(void *args)
 
 void app_main(void)
 {
-  uint8_t led_state = 0;
   ESP_ERROR_CHECK(gpio_reset_pin(LED_PIN));
   ESP_ERROR_CHECK(gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT));
 
@@ -118,11 +158,10 @@ void app_main(void)
   ESP_ERROR_CHECK(uart_set_pin(UART_PORT, UART_TX_PIN, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
   xTaskCreate(uart_task, "uart_task", 2048, NULL, 10, NULL);
+  xTaskCreate(position_check_task, "position_check_task", 2048, NULL, 10, NULL);
 
   while (1)
   {
-    led_state = !led_state;
-    gpio_set_level(LED_PIN, led_state);
     vTaskDelay(pdMS_TO_TICKS(500));
   }
 }
