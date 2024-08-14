@@ -195,6 +195,7 @@ static void position_check_task(void *args)
 
     send_water_level(water_level);
     position_stable_count = 0;
+    water_level_stable_count = 0;
     gpio_set_level(LED_PIN, 1);
 
     vTaskDelay(pdMS_TO_TICKS(3000));
