@@ -335,7 +335,7 @@ void app_main(void)
   esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
 
   xTaskCreate(uart_task, "uart_task", 4096, NULL, 10, NULL);
-  xTaskCreate(position_check_task, "position_check_task", 4096, NULL, 10, NULL);
+  xTaskCreate(position_check_task, "position_check_task", 8192, NULL, 10, NULL);
 
   while (1)
   {
