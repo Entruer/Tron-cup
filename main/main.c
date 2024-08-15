@@ -150,7 +150,6 @@ void gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
     default:
       break;
   }
-  return;
 }
 
 void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
@@ -335,13 +334,8 @@ void app_main(void)
   esp_bt_io_cap_t   iocap      = ESP_BT_IO_CAP_IO;
   esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
 
-  // Set parameters of legacy pairing
-  // esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_VARIABLE;
-  // esp_bt_pin_code_t pin_code;
-  // esp_bt_gap_set_pin(pin_type, 0, pin_code);
-
-  xTaskCreate(uart_task, "uart_task", 2048, NULL, 10, NULL);
-  xTaskCreate(position_check_task, "position_check_task", 2048, NULL, 10, NULL);
+  xTaskCreate(uart_task, "uart_task", 4096, NULL, 10, NULL);
+  xTaskCreate(position_check_task, "position_check_task", 4096, NULL, 10, NULL);
 
   while (1)
   {
