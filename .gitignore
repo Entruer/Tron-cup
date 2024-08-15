@@ -7,3 +7,4 @@ cmake-build-*/
 
 #esp-idf
 build/
+sdkconfig.old

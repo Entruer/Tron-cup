@@ -7,9 +7,16 @@
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "driver/uart.h"
+#include "esp_bt.h"
+#include "esp_bt_device.h"
+#include "esp_bt_main.h"
+#include "esp_gap_bt_api.h"
 #include "esp_log.h"
+#include "esp_spp_api.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 
 /****************************************************************************************
  * Constants
@@ -53,8 +60,10 @@ uart_config_t uart_config = {
  * Global Variables
  ****************************************************************************************/
 
-float angle[3];
-bool  is_angle_updated = false;
+float    angle[3];
+bool     is_angle_updated = false;
+bool     client_connected = false;
+uint32_t spp_handle       = 0;
 
 /****************************************************************************************
  * Function Definitions
@@ -110,6 +119,87 @@ void decode_imu_data(uint8_t chrTemp[])
 void send_water_level(uint8_t data)
 {
   ESP_LOGI("Position", "Position stable : %d", data);
+  if (client_connected)
+  {
+    esp_spp_write(spp_handle, 1, &data);
+  }
+}
+
+/****************************************************************************************
+ * Callbacks
+ ****************************************************************************************/
+
+void gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
+{
+  switch (event)
+  {
+    case ESP_BT_GAP_AUTH_CMPL_EVT:
+      if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS)
+      {
+        ESP_LOGI("Bluetooth", "authentication success.");
+      }
+      else
+      {
+        ESP_LOGE("Bluetooth", "authentication failed, status:%d", param->auth_cmpl.stat);
+      }
+      break;
+    case ESP_BT_GAP_CFM_REQ_EVT:
+      ESP_LOGI("Bluetooth", "ESP_BT_GAP_CFM_REQ_EVT Please compare the numeric value: %" PRIu32, param->cfm_req.num_val);
+      esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
+      break;
+    default:
+      break;
+  }
+  return;
+}
+
+void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
+{
+  switch (event)
+  {
+    case ESP_SPP_INIT_EVT:
+      ESP_LOGI("Bluetooth", "ESP_SPP_INIT_EVT");
+      ESP_ERROR_CHECK(esp_spp_start_srv(ESP_SPP_SEC_AUTHENTICATE, ESP_SPP_ROLE_SLAVE, 0, "SPP_SERVER"));
+      break;
+    case ESP_SPP_START_EVT:
+      if (param->start.status == ESP_SPP_SUCCESS)
+      {
+        ESP_LOGI("Bluetooth", "ESP_SPP_START_EVT handle:%" PRIu32 " sec_id:%d scn:%d", param->start.handle, param->start.sec_id,
+                 param->start.scn);
+        esp_bt_gap_set_device_name("Pawpaw");
+        esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+      }
+      else
+      {
+        ESP_LOGE("Bluetooth", "ESP_SPP_START_EVT status:%d", param->start.status);
+      }
+      break;
+    case ESP_SPP_DATA_IND_EVT:
+      ESP_LOGI("Bluetooth", "ESP_SPP_DATA_IND_EVT len:%d handle:%" PRIu32,
+               param->data_ind.len, param->data_ind.handle);
+      if (param->data_ind.len < 128)
+      {
+        ESP_LOG_BUFFER_HEX("", param->data_ind.data, param->data_ind.len);
+      }
+      break;
+    case ESP_SPP_CONG_EVT:
+      ESP_LOGI("Bluetooth", "ESP_SPP_CONG_EVT");
+      break;
+    case ESP_SPP_WRITE_EVT:
+      ESP_LOGI("Bluetooth", "ESP_SPP_WRITE_EVT");
+      break;
+    case ESP_SPP_SRV_OPEN_EVT:
+      ESP_LOGI("Bluetooth", "ESP_SPP_SRV_OPEN_EVT status:%d ", param->srv_open.status);
+      client_connected = true;
+      spp_handle       = param->srv_open.handle;
+      break;
+    case ESP_SPP_SRV_STOP_EVT:
+      ESP_LOGI("Bluetooth", "ESP_SPP_SRV_STOP_EVT");
+      client_connected = false;
+      break;
+    default:
+      break;
+  }
 }
 
 /****************************************************************************************
@@ -194,7 +284,7 @@ static void position_check_task(void *args)
     }
 
     send_water_level(water_level);
-    position_stable_count = 0;
+    position_stable_count    = 0;
     water_level_stable_count = 0;
     gpio_set_level(LED_PIN, 1);
 
@@ -217,6 +307,38 @@ void app_main(void)
   ESP_ERROR_CHECK(uart_driver_install(UART_PORT, UART_BUFFER_SIZE, 0, 0, NULL, 0));
   ESP_ERROR_CHECK(uart_param_config(UART_PORT, &uart_config));
   ESP_ERROR_CHECK(uart_set_pin(UART_PORT, UART_TX_PIN, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+
+  esp_err_t ret = nvs_flash_init();
+  if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+  {
+    ESP_ERROR_CHECK(nvs_flash_erase());
+    ret = nvs_flash_init();
+  }
+  ESP_ERROR_CHECK(ret);
+  esp_bt_controller_config_t bt_cfg        = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+  esp_bluedroid_config_t     bluedroid_cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
+  esp_spp_cfg_t              spp_cfg       = {
+                             .mode              = ESP_SPP_MODE_CB,
+                             .enable_l2cap_ertm = true,
+                             .tx_buffer_size    = 0,
+  };
+  ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
+  ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT));
+  ESP_ERROR_CHECK(esp_bluedroid_init_with_cfg(&bluedroid_cfg));
+  ESP_ERROR_CHECK(esp_bluedroid_enable());
+  ESP_ERROR_CHECK(esp_bt_gap_register_callback(gap_callback));
+  ESP_ERROR_CHECK(esp_spp_register_callback(spp_callback));
+  ESP_ERROR_CHECK(esp_spp_enhanced_init(&spp_cfg));
+
+  // Set parameters of SSP
+  esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
+  esp_bt_io_cap_t   iocap      = ESP_BT_IO_CAP_IO;
+  esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
+
+  // Set parameters of legacy pairing
+  // esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_VARIABLE;
+  // esp_bt_pin_code_t pin_code;
+  // esp_bt_gap_set_pin(pin_type, 0, pin_code);
 
   xTaskCreate(uart_task, "uart_task", 2048, NULL, 10, NULL);
   xTaskCreate(position_check_task, "position_check_task", 2048, NULL, 10, NULL);
