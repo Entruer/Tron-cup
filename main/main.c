@@ -8,7 +8,6 @@
 #include "driver/i2c.h"
 #include "driver/uart.h"
 #include "esp_bt.h"
-#include "esp_bt_device.h"
 #include "esp_bt_main.h"
 #include "esp_gap_bt_api.h"
 #include "esp_log.h"
@@ -19,7 +18,7 @@
 #include "nvs_flash.h"
 
 /****************************************************************************************
- * Constants
+ * Defines
  ****************************************************************************************/
 
 #define LED_PIN           GPIO_NUM_2
